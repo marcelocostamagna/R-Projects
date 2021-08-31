@@ -1,0 +1,637 @@
+---
+title: "Palmer Penguins and Tidymodels"
+author: MC
+date: March 12, 2021
+
+output:
+  html_document:
+    theme: readable
+    highlight: zenburn 
+    toc: true
+    toc_float: true
+    toc_depth: 5
+    number_sections: true
+    df_print: paged
+---
+
+# Shortcuts
+
+-   **Insert Chunk** : Ctrl + Alt + i
+
+-   **Excecute current line** : Ctrl + Enter / Alt + Enter
+
+-   **Excecute current chunck** : Ctrl + Shift + Enter
+
+-   **Insert pipeline operator ( %\>% )** : Ctrl + Shift + m
+
+-   **Insert assignment operator (\<-)** : Alt + -
+
+-   **Zoom editor :** Ctrl + Shift + 1
+
+-   **Show command palette** : Ctrl + Shift + p
+
+# Packages Install
+
+```{r}
+# install.packages("tidyverse")
+# install.packages("tidymodels")
+# install.packages("doParallel")
+# install.packages("palmerpenguins")
+# install.packages("hrbrthemes")
+# install.packages("xgboost")
+# install.packages("ranger")
+# install.packages("glmnet")
+# install.packages("kknn")
+# install.packages("tictoc")
+```
+
+# Packages Loading
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(doParallel)
+library(palmerpenguins)
+library(hrbrthemes)
+library(xgboost)
+library(ranger)
+library(glmnet)
+library(kknn)
+library(tictoc)
+theme_set(hrbrthemes::theme_ipsum_rc())
+
+# doParallel
+cores <- parallel::detectCores(logical = FALSE)
+registerDoParallel(cores = cores)
+
+set.seed(77)
+```
+
+[Tidyverse Package](https://www.tidyverse.org/)
+
+[Learn R for Data Science](https://r4ds.had.co.nz/index.html)
+
+[Tidymodels](https://www.tidymodels.org/)
+
+[Learn Tidymodels](https://www.tmwr.org/)
+
+# Data Wrangling
+
+## Data Loading
+
+```{r}
+penguins_data <-
+  palmerpenguins::penguins
+
+penguins_data %>% glimpse()
+
+penguins_data %>% head()
+```
+
+```{r}
+penguins_data %>% summary()
+```
+
+## Data Preprocessing
+
+Let's filter NA's and remove **year** and **island** column
+
+```{r}
+penguins_df <-
+  penguins_data %>%
+  filter(!is.na(sex)) %>%
+  select(-year, -island)
+
+head(penguins_df)
+
+```
+
+## Initial Train/Test Split
+
+First we'll separate train / test with an initial stratified split:
+
+[Rsample package](https://rsample.tidymodels.org/index.html)
+
+```{r}
+penguins_split <-
+  rsample::initial_split(
+    penguins_df,
+    prop = 0.7,
+    strata = species
+  )
+
+penguins_split
+training(penguins_split)
+testing(penguins_split)
+```
+
+# Baseline Experiment
+
+[Parsnip package](https://www.tidymodels.org/find/parsnip/)
+
+[Parsnip models list](https://www.tidymodels.org/find/parsnip/)
+
+[Yardstick package](https://yardstick.tidymodels.org/)
+
+Let's predict the **specie** of the penguin
+
+```{r}
+
+knn_fit <-
+  nearest_neighbor() %>%
+  set_engine("kknn") %>%
+  set_mode("classification") %>%
+  fit(species ~ ., data = training(penguins_split)) 
+```
+
+## Baseline Metrics
+
+```{r}
+preds <-
+  predict(knn_fit, new_data = testing(penguins_split))
+
+actual <-
+  testing(penguins_split) %>% select(species)
+
+yardstick::f_meas_vec(truth = actual$species, estimate = preds$.pred_class)
+```
+
+# Tidymodels Definitions
+
+## Models
+
+[Parsnip models list](https://www.tidymodels.org/find/parsnip/)
+
+[Tune package](https://tune.tidymodels.org/)
+
+```{r}
+ranger_model <-
+  parsnip::rand_forest(mtry = tune(), min_n = tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+glm_model <-
+  parsnip::multinom_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+xgboost_model <-
+  parsnip::boost_tree(mtry = tune(), learn_rate = tune()) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+pull_dials_object(glm_model, "mixture")
+pull_dials_object(ranger_model, "mtry")
+```
+
+## Grids
+
+[Dials package](https://dials.tidymodels.org/)
+
+There's no need to know the tuning parameters ranges!!!
+
+```{r}
+ranger_grid <-
+  parameters(ranger_model) %>%
+  finalize(select(training(penguins_split), -species)) %>% # beacuse of mtry
+  dials::grid_regular(levels = 4)
+
+ranger_grid
+
+ranger_grid %>% ggplot(aes(mtry, min_n)) +
+  geom_point(size = 4, alpha = 0.6) +
+  labs(title = "Ranger: Regular grid for min_n & mtry combinations")
+
+glm_grid <-
+  parameters(glm_model) %>%
+  grid_random(size = 20)
+
+glm_grid
+
+glm_grid %>% ggplot(aes(penalty, mixture)) +
+  geom_point(size = 4, alpha = 0.6) +
+  labs(title = "GLM: Random grid for penalty & mixture combinations")
+
+xgboost_grid <-
+  parameters(xgboost_model) %>%
+  finalize(select(training(penguins_split), -species)) %>%
+  grid_max_entropy(size = 20)
+xgboost_grid
+
+xgboost_grid %>% ggplot(aes(mtry, learn_rate)) +
+  geom_point(size = 4, alpha = 0.6) +
+  labs(title = "XGBoost: Max Entropy grid for LR & mtry combinations")
+```
+
+## Recipes
+
+[Recipes Package](https://recipes.tidymodels.org/)
+
+[Ordering Recipes Steps](https://recipes.tidymodels.org/articles/Ordering.html)
+
+```{r}
+recipe_base <-
+  recipe(species ~ ., data = training(penguins_split)) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = TRUE) # Create dummy variables (which glmnet needs)
+
+# Apply exponential transformation
+recipe_1 <-
+  recipe_base %>%
+  step_YeoJohnson(all_numeric())
+
+recipe_1 %>%
+  prep() %>%
+  juice() %>%
+  summary()
+
+# Apply normalization
+recipe_2 <-
+  recipe_base %>%
+  step_normalize(all_numeric())
+
+recipe_2 %>%
+  prep() %>%
+  juice() %>%
+  summary()
+```
+
+## Metrics
+
+[Yardstick Package](https://yardstick.tidymodels.org/index.html)
+
+```{r}
+model_metrics <-
+  yardstick::metric_set(f_meas, pr_auc)
+```
+
+## K-Fold CV
+
+```{r}
+data_penguins_5_cv_folds <-
+  rsample::vfold_cv(
+    v = 5,
+    data = training(penguins_split),
+    strata = species
+  )
+data_penguins_5_cv_folds
+data_penguins_5_cv_folds$splits[[1]]$data
+```
+
+# Model Training
+
+## Option 1: Tune Grids
+
+### Workflows Creation
+
+[Workflow Package](https://workflows.tidymodels.org/)
+
+```{r}
+ranger_r1_workflow <-
+  workflows::workflow() %>%
+  add_model(ranger_model) %>%
+  add_recipe(recipe_1)
+
+glm_r2_workflow <-
+  workflows::workflow() %>%
+  add_model(glm_model) %>%
+  add_recipe(recipe_2)
+
+xgboost_r2_workflow <-
+  workflows::workflow() %>%
+  add_model(xgboost_model) %>%
+  add_recipe(recipe_2)
+```
+
+### Training: Gridsearch
+
+[Tune Package](https://tune.tidymodels.org/)
+
+-   Random Forest (ranger) will train 16 models ( 1 per HP combination) \* 5 folds
+
+-   Multinomial Regression (GLM) will train 20 models \* 5 folds
+
+```{r message=FALSE, warning=FALSE}
+tic("Ranger tune grid training duration ")
+ranger_tuned <-
+  tune::tune_grid(
+    object = ranger_r1_workflow,
+    resamples = data_penguins_5_cv_folds,
+    grid = ranger_grid,
+    metrics = model_metrics,
+    control = tune::control_grid(save_pred = TRUE)
+  )
+toc(log = TRUE)
+
+tic("GLM tune grid training duration ")
+glm_tuned <-
+  tune::tune_grid(
+    object = glm_r2_workflow,
+    resamples = data_penguins_5_cv_folds,
+    grid = glm_grid,
+    metrics = model_metrics,
+    control = tune::control_grid(save_pred = TRUE)
+  )
+toc(log = TRUE)
+
+tic("XGBoost tune grid training duration ")
+xgboost_tuned <-
+  tune::tune_grid(
+    object = xgboost_r2_workflow,
+    resamples = data_penguins_5_cv_folds,
+    grid = xgboost_grid,
+    metrics = model_metrics,
+    control = tune::control_grid(save_pred = TRUE)
+  )
+toc(log = TRUE)
+```
+
+#### Optional: Use Racing methods
+
+[Finetune Blog](https://www.tidyverse.org/blog/2020/12/finetune-0-0-1/)
+
+```{r}
+#install.packages("finetune")
+library(finetune)
+
+tic("Tune race training duration ")
+ft_xgboost_tuned <-
+  finetune::tune_race_anova(
+    object = xgboost_r2_workflow,
+    resamples = data_penguins_5_cv_folds,
+    grid = xgboost_grid,
+    metrics = model_metrics,
+    control = control_race(verbose_elim = TRUE) # 66
+  )
+toc(log = TRUE)
+```
+
+##### Plot Racing Methods
+
+```{r}
+plot_race(ft_xgboost_tuned) + labs(title = "Parameters Race by Fold")
+```
+
+Each line corresponds to a tuning parameter combination. Models with suboptimal f_meas scores are eliminated .
+
+### Results
+
+```{r}
+bind_cols(
+  tibble(model = c("Ranger", "GLM", "XGBoost")),
+  bind_rows(
+    ranger_tuned %>%
+      collect_metrics() %>% group_by(.metric) %>% summarise(best_va = max(mean, na.rm = TRUE)) %>% arrange(.metric) %>% pivot_wider(names_from = .metric, values_from = best_va),
+    glm_tuned %>%
+      collect_metrics() %>% group_by(.metric) %>% summarise(best_va = max(mean, na.rm = TRUE)) %>% arrange(.metric) %>% pivot_wider(names_from = .metric, values_from = best_va),
+    xgboost_tuned %>%
+      collect_metrics() %>% group_by(.metric) %>% summarise(best_va = max(mean, na.rm = TRUE)) %>% arrange(.metric) %>% pivot_wider(names_from = .metric, values_from = best_va)
+  )
+)
+```
+
+We'll select GLM and get the the best HP group
+
+```{r}
+# Metrics for each model
+glm_tuned %>% collect_metrics() # 20 models and 2 metrics
+
+# Best metric value
+glm_tuned %>%
+  collect_metrics() %>%
+  group_by(.metric) %>%
+  summarise(best_va = max(mean, na.rm = TRUE)) %>%
+  arrange(.metric)
+
+# Best HPO combination
+glm_tuned %>% select_best(metric = "f_meas")
+```
+
+```{r}
+glm_tuned %>%
+  collect_metrics() %>%
+  filter(.metric == "f_meas") %>%
+  select(mean, penalty, mixture) %>%
+  pivot_longer(penalty:mixture,
+    values_to = "value",
+    names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "F1", title = "F1 MetricEvolution")
+```
+
+Based on this plot we could explore a more limited space of HP
+
+### Finalize Tune Model
+
+Let's take best parameters and create the final model
+
+```{r}
+best_f1 <-
+  select_best(glm_tuned, metric = "f_meas")
+
+final_model_op1 <-
+  finalize_workflow(
+    x = glm_r2_workflow,
+    parameters = best_f1
+  )
+
+final_model_op1
+```
+
+### Last Fit Tune Model
+
+Let's fit to the whole training data and then evaluates on test
+
+```{r}
+tic("Train final model Tune")
+penguins_last_fit <-
+  last_fit(final_model_op1,
+    penguins_split,
+    metrics = model_metrics
+  )
+toc(log = TRUE)
+```
+
+#### Last Fit Tune Model Metrics
+
+```{r}
+collect_metrics(penguins_last_fit) %>%
+  arrange(.metric)
+
+penguins_last_fit %>%
+  collect_predictions() %>%
+  conf_mat(truth = species, estimate = .pred_class)
+
+penguins_last_fit %>%
+  pull(.predictions) %>%
+  as.data.frame() %>%
+  filter(.pred_class != species)
+```
+
+### Feature Importance
+
+```{r}
+library(vip)
+
+final_model_op1 %>%
+  fit(data = penguins_df) %>%
+  pull_workflow_fit() %>%
+  vip(
+    geom = "col",
+    aesthetics = list(fill = "steelblue")
+  ) +
+  labs(title = "Feature Importance")
+```
+
+## Option 2: Workflow Sets Package
+
+This way we can combine all possible models + recipes. A drawback is that you can't assign custom tuning grids, it will use **grid_latin_hypercube** by default.
+
+[Workflow Set Package](https://workflowsets.tidymodels.org/index.html)
+
+[Latin hypercube grid](https://dials.tidymodels.org/reference/grid_max_entropy.html)
+
+### Install Workflow Sets Package
+
+```{r}
+# install.packages("devtools")
+# library("devtools")
+# devtools::install_github("tidymodels/workflowsets")
+library(workflowsets)
+
+```
+
+### Set Creation
+
+```{r}
+wfs_models <-
+  workflow_set(
+    models = list(
+      ranger = ranger_model,
+      glm = glm_model,
+      xgb = xgboost_model
+    ),
+    preproc = list(
+      rec_yj = recipe_1,
+      rec_norm = recipe_2
+    ),
+    cross = TRUE
+  )
+
+wfs_models
+```
+
+Assuming **Ranger Model** doesn't work with **recipe_2** specifications, we can remove it:
+
+```{r}
+wfs_models <-
+  wfs_models %>%
+  anti_join(tibble(wflow_id = c("rec_norm_ranger")), by = "wflow_id")
+
+wfs_models
+```
+
+### Training WF Sets
+
+```{r}
+tic("WF Sets Training time ")
+wfs_models <-
+  workflow_map(
+    object = wfs_models,
+    fn = "tune_grid", # OPTIONAL finetune::tune_race_anova
+    resamples = data_penguins_5_cv_folds,
+    grid = 10, # 10 HP combination
+    metrics = model_metrics,
+    verbose = TRUE
+  )
+toc()
+```
+
+### Results
+
+We have 5 models with 10 HP =\> 50 models to run
+
+```{r}
+autoplot(wfs_models, metric = "f_meas") + labs(title = "Ranked Kfolds Models Preformance")
+```
+
+```{r}
+autoplot(wfs_models, metric = "f_meas", select_best = TRUE) + labs(title = "Models Performance Ranking")
+```
+
+```{r}
+rank_results(wfs_models, rank_metric = "f_meas", select_best = TRUE)
+```
+
+### Finalize WFS Models
+
+Select the best workflow (model + recipe)
+
+```{r}
+wfs_glm_best_wf <-
+  wfs_models %>%
+  pull_workflow("rec_yj_glm") # Since all workflows are in the WFS object !!!
+
+wfs_glm_best_wf
+```
+
+Select best model, get best parameters and create the final model
+
+```{r}
+wfs_best_f1 <-
+  wfs_models %>%
+  pull_workflow_result("rec_yj_glm") %>%
+  select_best(metric = "f_meas")
+
+final_model_wfs <-
+  finalize_workflow(
+    x = wfs_glm_best_wf,
+    parameters = wfs_best_f1
+  )
+
+final_model_wfs
+```
+
+### Last Fit WFS Models
+
+```{r}
+tic("Train final model WFS")
+penguins_last_fit_wfs <-
+  last_fit(final_model_wfs,
+    penguins_split,
+    metrics = model_metrics
+  )
+toc(log = TRUE)
+```
+
+#### Last Fit WFS metrics
+
+```{r}
+collect_metrics(penguins_last_fit_wfs) %>%
+  arrange(.metric)
+
+penguins_last_fit_wfs %>%
+  collect_predictions() %>%
+  conf_mat(truth = species, estimate = .pred_class)
+
+penguins_last_fit_wfs %>%
+  pull(.predictions) %>%
+  as.data.frame() %>%
+  filter(.pred_class != species)
+```
+
+# Models Training duration
+
+```{r}
+tic.log() %>%
+  unlist() %>%
+  tibble()
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
