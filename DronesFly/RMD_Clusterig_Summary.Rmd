@@ -1,0 +1,260 @@
+---
+title: "Four Clustering Approaches For A Sinlge Drone Fly"
+author: "Marcelo Costamagna"
+date: "January 21, 2019"
+# output:
+#   html_document:
+#     df_print: paged
+#   pdf_document: default
+#   word_document: default
+
+output:
+  html_document:
+    keep_md: true
+    theme: paper
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    code_folding: show
+    fig_height: 4.5
+    fig_width: 10
+    fig.align: center
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+library(readxl)
+library(tidyverse)
+library(plotly)
+library(dbscan)
+library(fpc)
+library(cluster)
+library(factoextra)
+library(NbClust)
+
+
+```
+
+
+# RPub example
+[DroneFly RPubs Example](https://rpubs.com/marcelocostamagna/droneFlyClust)
+
+# Data Preparation
+## Data Loading
+
+
+Data comes from an Excel file with several useless columns for this analysis so we'll get rid of them:
+
+```{r Data Loading}
+Angles_Mav_ <- read_excel("data/Compared_Angles_Mav_2018-02-21.xlsx",
+                          col_types = c("skip", "skip", "skip", 
+                                        "skip", "skip", "numeric", "numeric", 
+                                        "numeric", "skip", "skip", "skip", 
+                                        "skip", "skip", "skip", "skip"))
+Angles_Mav_ <- na.exclude(Angles_Mav_)
+head(Angles_Mav_ , 5)
+```
+
+
+## Convertion from Polar Cylindrical Coordinates to Cartesian Coordinates
+
+In order to plot values we need to convert it to x, y, z points and then we'll plot them:
+
+```{r coordinates convertion, message=FALSE, warning=FALSE}
+x <- vector(mode="numeric", length=0)
+y <- vector(mode="numeric", length=0)
+z <- vector(mode="numeric", length=0)
+for (i in 1:nrow(Angles_Mav_)) {
+  radius <- as.numeric(Angles_Mav_$`Distance (Rho)`[i]) #distance rho (radius)
+  theta <- as.numeric(Angles_Mav_$`Angles (Theta)`[i])  # angle theta
+  altitude <- Angles_Mav_$`Altitude (z)`[i]             # altitude
+  x[i] <-  radius * cos(theta)
+  y[i] <-  radius * sin(theta)
+  z[i] <-  altitude
+}
+
+
+```
+```{r xyz_converted, echo=FALSE}
+#bind  cols
+Angles_Mav_xyz <-  bind_cols(nro = 1:nrow(Angles_Mav_), x = x,y = y,z = z)
+head(Angles_Mav_xyz,5)[2:4]
+plot_ly(Angles_Mav_xyz, y= ~y,  x= ~x, z = ~z, type ='scatter3d', mode='markers')
+```
+
+#Clustering
+
+## Defining optimal number of clusters
+```{r Elbow method}
+#Elbow method
+fviz_nbclust(scale(Angles_Mav_xyz), kmeans, method = "wss") +
+  geom_vline(xintercept = 4, linetype = 2) +
+  labs(subtitle = "Elbow method")
+
+```
+
+
+## 1 - Basic K-means 
+We'll begin with a simplea approach, considering 4 clusters and unscaled data
+```{r k-basic, message=FALSE, warning=FALSE}
+k_vect <- Angles_Mav_xyz %>%
+  select( y, x, z) %>% 
+  kmeans(., 4, nstart = 25)
+
+```
+
+```{r k-basic metrics, echo=FALSE, message=FALSE, warning=FALSE}
+cat("K-means clustering with", 
+    max(k_vect$cluster),
+    "clusters of sizes:",
+    "\n" ,
+    k_vect$size, 
+    "\n" ,
+    "\nWithin cluster sum of squares by cluster:",
+    "\n" ,
+    k_vect$withinss,
+    "\n" ,
+    "\nWithin  sum of squares:",
+    "\n" ,
+    sum(k_vect$withinss))
+
+Angles_Mav_xyz <-  bind_cols(Angles_Mav_xyz,k_cluster_basic = k_vect$cluster) 
+
+plot_ly(Angles_Mav_xyz, y= ~y,  x= ~x, z = ~z, color =~k_cluster_basic, type= 'scatter3d', mode= 'markers') 
+```
+
+
+## 2 - Scaled K-means
+
+Generally variables are scaled to have:
+a) standard deviation one 
+b) mean zero.
+The standardization of data is an approach widely used  before clustering.
+
+```{r k-scaled}
+
+scale_angles <- scale(Angles_Mav_xyz[, 2:4])
+set.seed(123)
+km_ang <- kmeans(scale_angles, 4, nstart = 25)
+
+```
+
+```{r k-scaled metrics, echo=FALSE, message=FALSE, warning=FALSE}
+cat("K-means clustering with", 
+    max(km_ang$cluster),
+    "clusters of sizes:",
+    "\n" ,
+    km_ang$size, 
+    "\n" ,
+    "\nWithin cluster sum of squares by cluster:",
+    "\n" ,
+    km_ang$withinss,
+    "\n" ,
+    "\nWithin  sum of squares:",
+    "\n" ,
+    sum(km_ang$withinss))
+
+Angles_Mav_xyz <-  bind_cols(Angles_Mav_xyz,k_cluster_scaled = km_ang$cluster) 
+
+plot_ly(Angles_Mav_xyz, y= ~y,  x= ~x, z = ~z, color =~k_cluster_scaled, type= 'scatter3d', mode= 'markers')
+```
+**Within Sum of Squares  decreases dramatically when data is scaled**
+
+## 3-DBSCAN - Density Based Spacial Clustering of Aplications with Noise 
+
+Density-based clustering constructs clusters in regard to the density measurement. Clusters in this method have a higher density than the remainder of the dataset.
+This algorithm works on a parametric approach.
+a) Epsilon: the radius of our neighborhoods around a data point p.
+b) minPts: the minimum number of data points we want in a neighborhood to define a cluster.
+
+```{r density based}
+
+#DBSCAN input must be a matrix.
+angles_matrix <- as.matrix(Angles_Mav_xyz[,2:4])
+angles_matrix_sca <- scale(angles_matrix)
+
+#this plot helps us to define the value of epsilon
+kNNdistplot(angles_matrix_sca, k=25) #tells us that the ideal values of "e" is between 1 and 2
+abline(h=1.5, col="red")
+
+```
+
+The plot suggests that the  **epsilon distance** should be between 1 and 2
+
+
+```{r}
+set.seed(1234)
+db <-  dbscan::dbscan(angles_matrix_sca, eps = 1.6, minPts = 10)
+print(db)
+```
+
+Density based method suggests that the number of cluster should be 2. Cluster "0"" contains all the values labeled as "noise".
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Angles_Mav_xyz <-  bind_cols(Angles_Mav_xyz, k_cluster_dbscan = db$cluster) 
+plot_ly(Angles_Mav_xyz, y= ~y,  x= ~x, z = ~z, color=~k_cluster_dbscan, type= 'scatter3d', mode= 'markers' ) 
+```
+
+Clusters vizualised thru Principal Components  
+
+```{r Hull Plot}
+hullplot(angles_matrix_sca, db$cluster)
+
+```
+
+
+
+```{r DB metrics, echo=FALSE, message=FALSE, warning=FALSE}
+cs <-  fpc::cluster.stats(dist(angles_matrix_sca), db$cluster)
+cat( "Within sum of squares:",
+     "\n" ,
+     cs$within.cluster.ss)
+
+```
+
+  
+## 4- Medoids Based K-means (PAM - Partition Medoids)
+
+In k-medoids clustering, each cluster is represented by one of the data point in the cluster. These points are named cluster medoids.
+K-medoid is a robust alternative to k-means clustering. This means that, the algorithm is less sensitive to noise and outliers, compared to k-means, because it uses medoids as cluster centers instead of means (used in k-means).
+  
+```{r k-pam, echo=TRUE}
+pam.res <- pam(angles_matrix_sca, 3) 
+
+```
+
+```{r pam metrics, echo=FALSE, message=FALSE, warning=FALSE}
+pam_out <-  fpc::cluster.stats(dist(angles_matrix_sca), pam.res$clustering) 
+
+cat("Within sum of squares:",
+    "\n" ,
+    pam_out$within.cluster.ss)
+
+Angles_Mav_xyz <-  bind_cols(Angles_Mav_xyz, k_cluster_pam = pam.res$clustering) 
+plot_ly(Angles_Mav_xyz, y= ~y,  x= ~x, z = ~z, color=~k_cluster_pam, type= 'scatter3d', mode= 'markers' ) 
+
+```
+
+# Summary
+
+##Summary Table  
+```{r summary, echo=FALSE}
+summ <- tibble( 
+  Approach = c("K-Means Basic", "K-Means Scaled", "DBSCAN", "PAM"),
+  Sum_of_Sq = c(sum(k_vect$withinss), sum(km_ang$withinss), cs$within.cluster.ss,pam_out$within.cluster.ss )
+  )
+
+summ %>% arrange(Sum_of_Sq)
+```
+
+##Conclusion
+Based on **Within Sum of Sqaures** metric we can assume that the best approach is **K-Means Scaled** clustering data in 4 groups.
+Despite this mathematical conclusion, checking the corresponding plots might give a better understanding of the situation either to confirm or not the approach accuracy.
+
+
+
+
