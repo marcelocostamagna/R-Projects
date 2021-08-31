@@ -1,0 +1,210 @@
+---
+title: "Análisis de Cluster, K-means"
+author: "Grupo 9 - Marcelo Costamagna, Angelina Garnica"
+date: "5/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(RCurl)
+library(GGally)
+library(gridExtra)
+```
+
+# Análisis de Cluster, k-means
+## Ciencia de Datos aplicada en la Industria Retail
+
+```{r include=FALSE}
+x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/sales.csv")
+sales <- read.csv(text = x)
+
+x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/stores.csv")
+stores <- read.csv(text = x)
+
+x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/features.csv")
+features <- read.csv(text = x)
+```
+
+A los fines de realizar un análisis de cluster para las 45 tiendas anónimas localizadas en diferentes departamentos, se buscará extraer de la base de ventas todas aquellas variables que permitan caracterizar a las tiendas.
+
+Al analizar la base de ventas se observa la presencia de 8.452 ids duplicados que son excluídos de la base.
+
+```{r include=FALSE}
+dup <- sales %>%
+  group_by(Sale.Id) %>%
+  mutate(q = n()) %>%
+  filter(q > 1)
+
+sales <- sales %>%
+  distinct(Sale.Id, .keep_all = T)
+
+#Cantidad de semanas de información por store y departamento 
+
+T1 <- sales %>%
+  group_by(Store, Dept) %>%
+  summarise(q = n())
+
+#Cantdad de departamentos, fecha min y max
+
+sales$Date1 <- as.Date(as.character(sales$Date), format = "%d/%m/%Y")
+
+T2 <- sales %>%
+  group_by(Store) %>%
+  summarise(dptos = n_distinct(Dept),
+            sem = n(),
+            fi = min(Date1),
+            ff = max(Date1),
+            total_ventas = sum(Weekly_Sales, na.rm = T),
+            ventas_prom_sem = round(total_ventas/sem, 0))
+```
+
+Posteriormente se agrupan las variables de la base de ventas (sales) de la siguintte manera: <br>
+dptos: Número de departamentos distintos por tienda <br>
+sem: Cantidad de semanas para las que hay información en la base de ventas <br>
+fi: fecha del primer registro de la base <br>
+ff: fecha de la última semana de la base <br>
+total_ventas: sumatoria de las ventas de todas las semanas <br>
+ventas_prom_sem:promedio de ventas por semana <br>
+
+Esta información se agregó a la base stores. Adicionalmente se encontraron 6 casos con valores faltantes en la variale Size (tamaño) los que fueron imputados teniendo en cuenta la media por tipo de tienda.
+
+```{r include= F}
+stores <- merge(stores, T2, by = "Store", all.x = T)
+
+##Se verifican 6 casos sin tamaño => se imputa por la media del tipo
+
+size <- stores %>%
+  group_by(Type) %>%
+  summarise(prom = round(mean(Size, na.rm = T), 0))
+
+stores$Size1 <- ifelse(stores$Type == "A" & is.na(stores$Size) == T, as.numeric(size[1,2]),
+                       ifelse(stores$Type == "B" & is.na(stores$Size) == T, as.numeric(size[2,2]),
+                              ifelse(stores$Type == "C" & is.na(stores$Size) == T, as.numeric(size[3,2]),
+                                     stores$Size)))
+
+
+```
+
+## Clusters
+A los fines de obtener la mejor agrupación se fueron realizando diferentes pruebas. En primer lugar se estandarizaron las variables para evitar el efecto escala; luego se buscó definir mediante el gráfico Elbow, el número de clúster más adecuado.
+
+Gráfico N°1 <br>
+
+```{r echo=FALSE}
+#Estandarizacion
+stores.st <- scale(stores[, c(5,6,9:11)])
+
+#NUMERO DE CLUSTER
+#stores.st <- scale(stores[, c(9:11)])
+
+wssplot <- function(data, nc=10, seed=20){
+  wss <- (nrow(data)-1)*sum(apply(data,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Numero de Clusters",
+       ylab="Within groups sum of squares")}
+
+wssplot(stores.st, nc=5) 
+```
+
+Se consider adecuado el uso de tres Clusters.
+
+## Cluster 1
+Se consideran las variables tamaño, ventas totales, ventas por semana, cantidad de semanas con información y cantidad de departamentos. 
+
+```{r include= FALSE}
+Cluster_1 <- kmeans(stores.st, 3, nstart = 20)
+
+Cluster_1$cluster <- as.factor(Cluster_1$cluster)
+stores.st <- as.data.frame(stores.st)
+
+c1_1 <- ggplot(stores.st, aes(ventas_prom_sem, dptos, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_2 <- ggplot(stores.st, aes(ventas_prom_sem, sem, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_3 <- ggplot(stores.st, aes(ventas_prom_sem, total_ventas, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_4 <- ggplot(stores.st, aes(ventas_prom_sem, Size1, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_5 <- ggplot(stores.st, aes(total_ventas, dptos, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_6 <- ggplot(stores.st, aes(total_ventas, sem, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_7 <- ggplot(stores.st, aes(total_ventas, Size1, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_8 <- ggplot(stores.st, aes(dptos, sem, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_9 <- ggplot(stores.st, aes(dptos, Size1, color = Cluster_1$cluster)) + 
+  geom_point()
+
+c1_10 <- ggplot(stores.st, aes(Size1, sem, color = Cluster_1$cluster)) + 
+  geom_point()
+
+```
+
+```{r echo= FALSE}
+Cluster_1
+```
+
+Se realiza una comparación con la variable "Tipo" de la base de tiendas para analizar si la misma tiene alguna relación con las variables definidas para el modelo.
+
+```{r echo=FALSE}
+table(Cluster_1$cluster, stores$Type)
+```
+
+Gráfico N°2 <br>
+
+```{r echo=FALSE, fig.height= 25, fig.width= 15}
+grid.arrange(c1_1, c1_2, c1_3, c1_4, c1_5, c1_6, c1_7, c1_8, c1_9, c1_10, 
+             ncol=2, nrow =5)
+```
+
+## Cluster 2
+Se eliminan las variables cantidad de semanas (sem) y cantidad de departamentos (dptos). k=3
+
+```{r include=FALSE}
+stores.st <- stores.st[, c(3:5)]
+
+set.seed(20)
+Cluster_2 <- kmeans(stores.st, 3, nstart = 20)
+
+Cluster_2$cluster <- as.factor(Cluster_2$cluster)
+
+stores.st <- as.data.frame(stores.st)
+
+c2_1 <- ggplot(stores.st, aes(ventas_prom_sem, total_ventas, color = Cluster_2$cluster)) + 
+  geom_point()
+
+c2_2 <- ggplot(stores.st, aes(ventas_prom_sem, Size1, color = Cluster_2$cluster)) + 
+  geom_point()
+
+c2_3 <- ggplot(stores.st, aes(Size1, total_ventas, color = Cluster_2$cluster)) + 
+  geom_point()
+
+```
+
+```{r echo=FALSE}
+Cluster_2
+table(Cluster_2$cluster, stores$Type)
+
+```
+
+
+Gráfico N°3 <br>
+
+```{r echo=FALSE}
+grid.arrange(c2_1, c2_2, c2_3, ncol=2, nrow =2)
+```
+

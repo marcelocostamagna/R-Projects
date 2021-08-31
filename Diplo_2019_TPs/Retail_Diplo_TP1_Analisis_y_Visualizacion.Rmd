@@ -1,0 +1,547 @@
+---
+title: "Ciencia de Datos aplicada en la Industria Retail"
+subtitle: "TP 1: Análisis y Visualización"
+output:
+html_document:
+keep_md: true
+theme: paper
+highlight: tango
+toc: true
+toc_depth: 2
+number_sections: true
+code_folding: show
+fig_height: 4.5
+fig_width: 10
+fig.align: center
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Preparación del entorno y carga de datos
+
+
+## Funciones útiles y librerias
+```{r funciones, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readr)
+library(lubridate)
+library(gridExtra)
+library(kableExtra)
+library(RCurl)
+
+
+#FUNCION PARA CALCULAR LA MODA
+getmode <- function(v) {
+uniqv <- unique(v)
+uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+## Carga de datos
+
+```{r message=FALSE, warning=FALSE}
+# Unzip data/data.zip 
+
+sales <- read_csv("Data/sales.csv")
+features <- read_csv("Data/features.csv")
+stores <- read_csv("Data/stores.csv")
+users <- read_csv("Data/users.csv")
+
+# x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/sales.csv")
+# sales <- read.csv(text = x)
+# 
+# x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/stores.csv")
+# stores <- read.csv(text = x)
+# 
+# x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/features.csv")
+# features <- read.csv(text = x)
+# 
+# x <- getURL("https://raw.githubusercontent.com/maxiarmesto/retail_data_analytics/master/users.csv")
+# users <- read.csv(text = x)
+
+```
+
+
+
+# Calcular estadísticos como la moda, media, mediana y desviación estándar del precio del combustible y la temperatura. ¿Responden a alguna distribución conocida?
+
+
+```{r estadisticos}
+features %>%
+  select(Fuel_Price, Temperature) %>%
+  summarise(
+    FP_moda = getmode(Fuel_Price),
+    FP_media = mean(Fuel_Price),
+    FP_mediana = median(Fuel_Price),
+    FP_std = sd(Fuel_Price),
+    T_moda = getmode(Temperature),
+    T_media = mean(Temperature),
+    T_mediana = median(Temperature),
+    T_std = sd(Temperature)
+  ) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = "striped")
+
+
+```
+
+
+
+
+Ahora graficamos los histogramas correspondientes para visualizar si se aproxima a alguna distribución.
+
+```{r}
+ggplot(features, aes(x = Fuel_Price)) +
+  geom_histogram(
+    aes(y = ..density..),
+    bins = round(sqrt(nrow(features)), 0),
+    alpha = 0.5,
+    fill = "steelblue",
+    position = "identity"
+  ) +
+  labs(title = "Histograma de Precios de Combustible",
+       x = "Precio",
+       y = "Frecuencia") +
+  scale_x_continuous(labels = scales::dollar) +
+  geom_density(alpha = 0.3) +
+  theme_minimal()
+
+ggplot(features, aes(x = Temperature)) +
+  geom_histogram(
+    aes(y = ..density..),
+    bins = round(sqrt(nrow(features)), 0),
+    alpha = 0.5,
+    fill = "steelblue",
+    position = "identity"
+  ) +
+  labs(title = "Histograma de Temperaturas",
+       x = "Temperatura",
+       y = "Frecuencia") +
+  geom_density(alpha = 0.3) +
+  theme_minimal()
+```
+
+La distribución de la variable temperatura se aproxima a una normal pero la variable precio de combustible no pareciera ser similar a ninguna.
+Planteamos un test KS donde:
+H0:los datos proceden de una distribución normal.
+H1:los datos no proceden de una distribución normal.
+
+```{r warning=FALSE}
+ks.test(features$Fuel_Price, pnorm,
+mean(features$Fuel_Price, na.rm = TRUE),
+sd(features$Fuel_Price, na.rm = TRUE))
+```
+
+P-value = 2.2e-16 por lo que no es posible afirmar que la variable Fuel_Price proviene de una distribución normal.
+
+```{r warning=FALSE}
+ks.test(features$Temperature, pnorm,
+mean(features$Temperature, na.rm = TRUE),
+sd(features$Temperature, na.rm = TRUE))
+```
+
+Vemos que p-value = 8.882e-16 por lo que no es posible afirmar que la variable Temperature proviene de una distribución normal.
+
+# Seleccionar una tienda cualquiera, y calcular el promedio de ventas mensuales para los años en cuestión, graficar la distribución de las ventas promedios mensuales para cada año. ¿Responde a alguna distribución conocida?
+
+Para analizar un caso en particular elegimos la tienda nro 1:
+
+```{r}
+sales %>%
+  filter(Store == 1) %>%
+  mutate(
+    Fecha = as.Date.character(Date, "%d/%m/%Y"),
+    Año = year(Fecha),
+    Mes = month(Fecha)
+  ) %>%
+  group_by(Año, Mes) %>%
+  summarise(Venta_Promedio = mean(Weekly_Sales)) %>%
+  ggplot(aes(
+    month(Mes, label = TRUE, abbr = TRUE),
+    Venta_Promedio,
+    group = factor(Año),
+    colour = factor(Año)
+  )) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Ventas Promedio Mensual por Año",
+       x = "Mes",
+       y = "Venta Promedio") +
+  scale_colour_discrete(name = "Año") +
+  scale_y_continuous(labels = scales::dollar) +
+  theme_minimal()
+```
+
+Vemos un indicio de que la mayoría de las ventas promedio por mes están entre los $20 mil y los $24 mil.
+Vamos a crear un histograma para corroborar la asunción.
+
+```{r}
+sales %>%
+  filter(Store == 1) %>%
+  mutate(
+    Fecha = as.Date.character(Date, "%d/%m/%Y"),
+    Año = year(Fecha),
+    Mes = month(Fecha)
+  ) %>%
+  group_by(Año, Mes) %>%
+  summarise(Venta_Promedio = mean(Weekly_Sales)) %>%
+  ggplot() +
+  aes(x = Venta_Promedio) +
+  geom_histogram(bins = 6, fill = '#0c4c8a') +
+  labs(title = "DIstribución de Ventas Promedio Mensuales",
+       y = "Frecuencia",
+       x = "Venta Promedio") +
+  scale_x_continuous(labels = scales::dollar) +
+  theme_minimal()
+```
+
+Ahora sí vemos que la distribución del promedio de ventas mensuales para el store 1 se aproxima a una normal.
+
+
+# Realizar un análisis de outliers para 3 variables a elección.
+
+Vamos a analizar las siguientes variables: tempreatura, desempleo y precio de combustible.
+
+```{r}
+g1 <- ggplot(data = features) +
+  aes(y = Temperature) +
+  geom_boxplot(fill = "#0c4c8a") +
+  labs(title = "Temperatura") +
+  scale_x_discrete(breaks = NULL) +
+  theme_minimal()
+
+g2 <- features %>%
+  group_by(Store) %>%
+  summarise(media_desempleo = mean(Unemployment, na.rm = T)) %>%
+  select(Store, media_desempleo) %>%
+  arrange(Store) %>%
+  ggplot(aes(y = media_desempleo)) +
+  geom_boxplot(fill = "#0c4c8a") +
+  scale_x_discrete(breaks = NULL) +
+  labs(title = "Desempleo ",
+       subtitle = "Medias agrupadas por Store",
+       y = "Tasa de Desempleo") +
+  theme_minimal()
+
+g3 <- ggplot(data = features) +
+  aes(y = Fuel_Price) +
+  geom_boxplot(fill = "#0c4c8a") +
+  labs(title = "Precio Combustible") +
+  scale_x_discrete(breaks = NULL) +
+  theme_minimal()
+
+
+grid.arrange(g1, g2, g3, ncol = 3)
+```
+
+
+Vemos que la variable temperatura presenta outliers en valores cercanod a 0 grados y que la tasa de desempleo tiene outliers para la tasa media de algún/os stores en particular con tasas mayores al 10%. En cambio el precio del combustible no presenta valores atípicos.
+
+Vamos a analizar la variable temperatura:
+```{r}
+
+features %>%
+  filter(Temperature %in% (boxplot.stats(features$Temperature)$out)) %>%
+  mutate(Fecha = as.Date.character(Date, "%d/%m/%Y")) %>%
+  select(Store, Fecha, Temperature) %>%
+  arrange(Store, Fecha) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = "striped",
+    full_width = F,
+    position = "left"
+  )
+```
+La tabla nos muestra que los outliers ocurrieron por un invierno muy frio alrededor de Enero 2013 en los stores nro 7 y 17.
+
+Ahora analizamos las tasa de desempleo media por store:
+
+
+```{r}
+
+features %>%
+  group_by(Store) %>%
+  summarise(media_desempleo = mean(Unemployment, na.rm = T)) %>%
+  select(Store, media_desempleo) %>%
+  filter(media_desempleo > 10) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = "striped",
+    full_width = F,
+    position = "left"
+  )
+
+```
+
+Si filtramos las tasas de desempleo medias mayores a 10% obtenemos los Stores que tiene valores atípicos de desempleo (stores: 12, 28 y 38)
+
+
+# ¿Qué pasaría con las ventas si se baja el combustible? ¿Que pasaría con las ventas si aumenta la tasa de desempleo? ¿Qué sucede con las ventas si nos encontramos en un día feriado? En el caso de las ventas mensuales promedios, ¿existe una relación entre la variable ventas y el mes del año en que nos encontramos?
+
+Primero vamos apreparar los datos y para eso necesitamos agrupar por semana y obtener las medias de ventas, precio de combustible y tasa de desempleo:
+
+
+```{r}
+ventas_semanales <- sales %>%
+  mutate(Fecha = as.Date.character(Date, "%d/%m/%Y")) %>%
+  group_by(Fecha) %>%
+  summarise(venta_semanal = mean(Weekly_Sales, na.rm = TRUE)) %>%
+  select(Fecha, venta_semanal)
+
+precio_comb_semanales <- features %>%
+  mutate(Fecha = as.Date.character(Date, "%d/%m/%Y")) %>%
+  group_by(Fecha) %>%
+  summarise(
+    precio_comb_semanal = mean(Fuel_Price, na.rm = TRUE),
+    desempleo_semanal = mean(Unemployment , na.rm = TRUE)
+  ) %>%
+  select(Fecha, precio_comb_semanal, desempleo_semanal)
+
+join_ventas_precio_comb <- precio_comb_semanales %>%
+  inner_join(ventas_semanales, by = c("Fecha"))
+
+```
+
+Ahora vamos a realizar el análisis de correlación de las ventas y el precio del combustible:
+
+```{r}
+ggplot(data = join_ventas_precio_comb) +
+  aes(x = precio_comb_semanal, y = venta_semanal) +
+  geom_point(color = "#0c4c8a") +
+  geom_smooth(method = 'lm') +
+  labs(
+    title = "Precio Combustible vs Ventas",
+    subtitle = paste0(
+      "Índice de Correlación:" ,
+      cor(
+        join_ventas_precio_comb$precio_comb_semanal,
+        join_ventas_precio_comb$venta_semanal
+      )
+    ),
+    x = "Precio Combustible"
+  ) +
+  scale_x_continuous(labels = scales::dollar) +
+  scale_y_continuous(labels = scales::dollar) +
+  theme_minimal()
+```
+
+La correlación es negativa pero no muy signinficante (-0.09) como para aseverar que las ventas podrían aumentar con la disminución del precio del combustible.
+
+Ahora analizamos la correlación de las ventas con la tasa de desempleo:
+
+```{r}
+ggplot(data = join_ventas_precio_comb) +
+  aes(x = desempleo_semanal, y = venta_semanal) +
+  geom_point(color = "#0c4c8a") +
+  geom_smooth(method = 'lm') +
+  labs(
+    title = "Desempleo vs Ventas",
+    subtitle = paste0(
+      "Índice de Correlación:" ,
+      cor(
+        join_ventas_precio_comb$desempleo_semanal,
+        join_ventas_precio_comb$venta_semanal
+      )
+    ),
+    x = "Tasa de Desempleo"
+  ) +
+  scale_y_continuous(labels = scales::dollar) +
+  theme_minimal()
+```
+
+La relación de la tasa de desempleo con las ventas es positiva (0.04) pero es insignificativa para aseverar que hay relación.
+
+Ahora vamos a analizar el comportamiento de las ventas cuando la semana tiene un día feriado.
+Primero preparamos los datos y obtenemos los feriados para cada semana:
+```{r}
+feriados <- features %>%
+  mutate(Fecha = as.Date.character(Date, "%d/%m/%Y"),
+         Feriado = as.logical(IsHoliday)) %>%
+  distinct(Fecha, Feriado)
+```
+
+Ahora juntamos los feriados con las ventas y graficamos:
+```{r}
+ventas_semanales %>%
+  inner_join(feriados, by = c("Fecha")) %>%
+  ggplot() +
+  aes(y = venta_semanal, x = Feriado, fill = Feriado) +
+  geom_boxplot() +
+  labs(title = 'Comparativo Ventas en Feriados',
+       y = 'Ventas') +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_x_discrete(breaks = NULL) +
+  theme_minimal()
+```
+
+Efectivamente vemos que la distribución de los promedios de las ventas son relativamente superiores en días feriados.
+
+Ahora para saber si existe una relación entre las ventas y el mes del año agrupamos todas las ventas por mes, computamos las medias y graficamos.
+
+```{r}
+sales %>%
+  mutate(Fecha = as.Date.character(Date, "%d/%m/%Y"),
+         Mes = month(Fecha)) %>%
+  group_by(Mes) %>%
+  select(Mes, Weekly_Sales) %>%
+  summarise(venta_mensual = mean(Weekly_Sales)) %>%
+  ggplot() +
+  aes(x = month(Mes, label = TRUE, abbr = TRUE),
+      y = venta_mensual,
+      group = 1) +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(title = 'Promedio de Ventas por Mes',
+       y = 'Venta Mensual',
+       x = 'Mes') +
+  geom_line(color = '#0c4c8a') +
+  geom_point() +
+  geom_text(aes(label = paste0("$", round(venta_mensual, 0))), vjust = -1, size =
+              3) +
+  theme_minimal()
+
+```
+
+El gráfico nos muestra que las ventas son muy bajas durante el mes de enero, se mantienen en torno a los $15 mil de febrero a octubre y aumentan mucho para la temporada noviembre y diciembre seguramente por navidad.
+
+# Crear una columna adicional IsMarkdown la cual será True si ha habido una rebaja en esa fecha y será False si no la ha habido. Teniendo en cuenta las variables IsHolisday e IsMarkdown, calcular su probabilidades conjunta y marginal.
+
+
+Primero vamso a preparar los datos creando variables binarias para saber cuándo es feriado, cuándo hay descuento y cuándo ambas.
+
+```{r}
+tabla_MDH <- features %>%
+  mutate(
+    IsMarkDown = if_else(is.na(MarkDown1), 0, 1),
+    IsHoliday = if_else(IsHoliday == TRUE, 1, 0),
+    MDandH = if_else(IsMarkDown == 1 &
+                       IsHoliday == 1, 1, 0)
+  ) %>%
+  select(IsHoliday, IsMarkDown, MDandH)
+```
+
+Ahora que tenemos los campos vamos a calcular las probabilidades marginales de cada variable y la probabilidad conjunta.
+
+```{r}
+
+addmargins(table(tabla_MDH$IsHoliday, tabla_MDH$IsMarkDown, dnn=c("IsHoliday", "IsMarkDown")))
+
+```
+
+
+
+```{r}
+prob_marg_holiday <-
+  round(sum(tabla_MDH$IsHoliday) / nrow(tabla_MDH), 2)
+prob_marg_markdown <-
+  round(sum(tabla_MDH$IsMarkDown) / nrow(tabla_MDH), 2)
+prob_conjunta <-  round(sum(tabla_MDH$MDandH) / nrow(tabla_MDH), 2)
+paste0("La probabilidad de que haya un feriado es: ", prob_marg_holiday)
+paste0("La probabilidad de que haya un descuento es: ", prob_marg_markdown)
+paste0("La probabilidad de conjunta de los eventos es: ", prob_conjunta)
+
+```
+
+# ¿Que probabilidad hay de que haya rebajas una semana que se sabe que es feriado? Dividir en 4 partes el dataset y calcular bayes con respecto a estas dos variables, usando los resultados de cada iteración / partición para calcular. El objetivo es simular que los datos que van llegando en cada iteración recalculan la probabilidad
+
+Primero vamos a crear numeros aleatorios entre 0 y 4 con distribución uniforme para poder separa el data set.
+```{r}
+indices <- ceiling(runif(nrow(tabla_MDH), 0, 4))
+```
+
+Agregamos la columna como índice y separamos los grupos 
+```{r}
+tabla_ext <- bind_cols(tabla_MDH, indice = indices)
+
+subset_1 <- tabla_ext %>% filter(indice == 1)
+subset_2 <- tabla_ext %>% filter(indice == 2)
+subset_3 <- tabla_ext %>% filter(indice == 3)
+subset_4 <- tabla_ext %>% filter(indice == 4)
+```
+
+```{r}
+addmargins(table(
+  subset_1$IsHoliday,
+  subset_1$IsMarkDown,
+  dnn = c("IsHoliday", "IsMarkDown")
+))
+```
+Probabilidad de que que haya descuento (A) dado que es feriado(B)  se calcula como P(A/B) = P(A)* P(B/A) / P(B)
+Entonces para la iteración 1 tenemos que :
+```{r}
+PA <- round(sum(subset_1$IsMarkDown) / nrow(subset_1), 2)
+PB <- round(sum(subset_1$IsHoliday) / nrow(subset_1), 2)
+PBA <- round(sum(subset_1$MDandH) / sum(subset_1$IsMarkDown) , 2)
+PAB <- round(PA * PBA / PB, 2)
+
+paste0("La probabilidad de que haya descuento dado que es feriado es: ", PAB)
+```
+ 
+
+Vamos a trabajar con el segundo set de datos:
+```{r}
+addmargins(table(subset_2$IsHoliday, subset_2$IsMarkDown,  dnn=c("IsHoliday", "IsMarkDown")))
+```
+
+Para la segunda iteración contamos con la probabilidad a priori recién calculada (0.56) y la vamos a introducir en la segunda iteración de cálculo de bayes:
+
+```{r}
+PA <- PAB
+PB <- round(sum(subset_2$IsHoliday) / nrow(subset_2), 2)
+PBA <- round(sum(subset_2$MDandH) / sum(subset_2$IsMarkDown) , 2)
+PAB <- round(PA * PBA / PB, 2)
+
+paste0(
+  "La probabilidad de que haya descuento dado que es feriado para la segunda iteración es: ",
+  PAB
+)
+```
+
+
+Ahora vamos a trabajar con el tercer set de datos:
+```{r}
+addmargins(table(subset_3$IsHoliday, subset_3$IsMarkDown,  dnn=c("IsHoliday", "IsMarkDown")))
+```
+
+Para la tercera iteración  realizamos el mismo cálculo:
+
+```{r}
+PA <- PAB
+PB <- round(sum(subset_3$IsHoliday) / nrow(subset_3), 2)
+PBA <- round(sum(subset_3$MDandH) / sum(subset_3$IsMarkDown) , 2)
+PAB <- round(PA * PBA / PB, 2)
+
+paste0(
+  "La probabilidad de que haya descuento dado que es feriado para la tercera iteración es: ",
+  PAB
+)
+
+```
+
+
+Ahora vamos a trabajar con el cuarto set de datos:
+```{r}
+addmargins(table(
+  subset_3$IsHoliday,
+  subset_3$IsMarkDown,
+  dnn = c("IsHoliday", "IsMarkDown")
+))
+```
+
+Finalmente para la cuarta iteración 
+```{r}
+PA <- PAB
+PB <- round(sum(subset_4$IsHoliday) / nrow(subset_3), 2)
+PBA <- round(sum(subset_4$MDandH) / sum(subset_4$IsMarkDown) , 2)
+PAB <- round(PA * PBA / PB, 2)
+
+paste0("La probabilidad de que haya descuento dado que es feriado para la cuarta iteración es: ",
+       PAB)
+
+```
+
+
+
