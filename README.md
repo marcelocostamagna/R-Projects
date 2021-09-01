@@ -1,2 +1,6 @@
 # R-Projects
-R useful examples
+R project examples
+
+# RPubs
+[RPubs Publications](https://rpubs.com/marcelocostamagna/)
+
