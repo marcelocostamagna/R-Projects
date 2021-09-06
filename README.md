@@ -2,5 +2,10 @@
 R project examples
 
 # RPubs
-[RPubs Publications](https://rpubs.com/marcelocostamagna/)
+[My RPubs Publications](https://rpubs.com/marcelocostamagna/)
 
+# Conda  Environment
+
+```shell
+conda env create -f r-env.yml
+```
